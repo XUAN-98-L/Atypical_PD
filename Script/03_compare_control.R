@@ -38,9 +38,18 @@ dat_full <- bind_rows(dat_list)
 
 # Top10 list (term, contrast) for filtering; keep only vs Ctr comparisons
 top10_path <- file.path(input_dir, "GO_BP_ssGSEA_top10_terms_for_heatmap.csv")
-top10_list <- read_csv(top10_path, show_col_types = FALSE) %>%
-  select(term, contrast) %>%
+top10_raw <- read_csv(top10_path, show_col_types = FALSE) %>% select(term, contrast)
+
+top10_list <- top10_raw %>%
   filter(contrast %in% c("NPS_vs_Ctr", "Tauopathy_vs_Ctr", "PD_vs_Ctr"))
+
+# Top10 union across these five contrasts (see table(top10_list_all_contrasts$contrast))
+all_contrasts_heatmap <- c(
+  "NPS_vs_Ctr", "NPS_vs_PD", "PD_vs_Ctr", "Tauopathy_vs_Ctr", "Tauopathy_vs_PD"
+)
+top10_list_all_contrasts <- top10_raw %>%
+  filter(contrast %in% all_contrasts_heatmap)
+terms_all_contrasts <- unique(top10_list_all_contrasts$term)
 
 # Format term label: remove GOBP_ prefix, replace _ with space, title case
 format_term <- function(x) {
@@ -95,7 +104,31 @@ top10_terms <- top10_terms %>%
 # Export wide top10_terms table
 write.csv(top10_terms, file.path(output_dir, "GO_BP_ssGSEA_top10_terms_wide.csv"), row.names = FALSE, quote = FALSE)
 
+# Wide table: all five contrasts (union of top10 terms per contrast), same layout as above
+dat_all_contrasts_tbl <- dat_full %>%
+  filter(term %in% terms_all_contrasts, contrast %in% all_contrasts_heatmap)
+logfc_wide_all <- dat_all_contrasts_tbl %>%
+  select(term, contrast, logFC) %>%
+  pivot_wider(names_from = contrast, values_from = logFC, names_glue = "{contrast}_logFC")
+adjp_wide_all <- dat_all_contrasts_tbl %>%
+  select(term, contrast, adj.P.Val) %>%
+  pivot_wider(names_from = contrast, values_from = adj.P.Val, names_glue = "{contrast}_adj.P.Val")
+top10_contrast_tags <- top10_list_all_contrasts %>%
+  distinct(term, contrast) %>%
+  group_by(term) %>%
+  summarise(contrast = paste(contrast, collapse = ";"), .groups = "drop")
 
+top10_terms_all_contrasts <- logfc_wide_all %>%
+  full_join(adjp_wide_all, by = "term") %>%
+  mutate(group = sapply(term, get_function)) %>%
+  left_join(top10_contrast_tags, by = "term")
+
+write.csv(
+  top10_terms_all_contrasts,
+  file.path(output_dir, "GO_BP_ssGSEA_top10_terms_wide_all_contrasts.csv"),
+  row.names = FALSE,
+  quote = FALSE
+)
 
 # Contrast label for plot (e.g. "NPS vs PD")
 contrast_label <- function(c) {
@@ -150,6 +183,10 @@ sig_mat <- plot_df %>%
 colnames(logfc_mat) <- gsub("_", " ", colnames(logfc_mat))
 colnames(sig_mat) <- gsub("_", " ", colnames(sig_mat))
 
+# Copy for clustered heatmap (no Function order / split)
+logfc_mat_for_cluster <- logfc_mat
+sig_mat_for_cluster <- sig_mat
+
 fun_vec <- plot_df %>%
   distinct(term_label, Function) %>%
   tibble::deframe()
@@ -169,8 +206,8 @@ fun_vec <- fun_vec[row_order]
 fun_split <- factor(fun_vec, levels = unique(fun_vec))
 fun_split_titles <- rep("", length(levels(fun_split)))
 
-# Color scale centered at 0
-fc_range <- range(logfc_mat, na.rm = TRUE)
+# Color scale centered at 0 (use full term set so scales match both heatmaps)
+fc_range <- range(logfc_mat_for_cluster, na.rm = TRUE)
 fc_max <- max(abs(fc_range))
 col_logfc <- circlize::colorRamp2(c(-fc_max, 0, fc_max), c("navy", "white", "firebrick3"))
 
@@ -189,7 +226,7 @@ ht <- ComplexHeatmap::Heatmap(
   row_title = fun_split_titles,
   row_title_gp = gpar(fontsize = 0),
   row_title_rot = 0,
-  cluster_rows = FALSE,
+  cluster_rows = TRUE,
   cluster_row_slices = FALSE,
   cluster_columns = FALSE,
   show_row_names = TRUE,
@@ -213,6 +250,120 @@ pdf(file.path(output_dir, "GO_BP_ssGSEA_top10_3comparisons_logFC_with_stars.pdf"
 ComplexHeatmap::draw(
   ha_left + ht,
   annotation_legend_side = "right",
+  heatmap_legend_side = "right",
+  padding = unit(c(2, 6, 2, 2), "mm")
+)
+dev.off()
+
+# Same heatmap without Function annotation; rows clustered (no Function split / ordering).
+# Use cluster_rows = dendrogram (Heatmap has no row_dend argument; partial match breaks).
+hc_row <- stats::hclust(stats::dist(logfc_mat_for_cluster))
+
+ht_cluster <- ComplexHeatmap::Heatmap(
+  logfc_mat_for_cluster,
+  name = "logFC",
+  col = col_logfc,
+  cluster_rows = stats::as.dendrogram(hc_row),
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_side = "right",
+  row_names_gp = gpar(fontsize = 9),
+  column_names_gp = gpar(fontsize = 10),
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    lab <- sig_mat_for_cluster[i, j]
+    if (!is.na(lab) && nzchar(lab)) {
+      grid.text(lab, x, y, gp = gpar(fontsize = 8, fontface = "bold", col = "black"))
+    }
+  },
+  heatmap_legend_param = list(
+    title = "logFC",
+    direction = "vertical"
+  )
+)
+
+pdf(file.path(output_dir, "GO_BP_ssGSEA_top10_3comparisons_logFC_with_stars_rowCluster_noFunction.pdf"),
+    width = 7, height = max(4, nrow(logfc_mat_for_cluster) * 0.25))
+ComplexHeatmap::draw(
+  ht_cluster,
+  heatmap_legend_side = "right",
+  padding = unit(c(2, 6, 2, 2), "mm")
+)
+dev.off()
+
+# Heatmap: union of top10 terms across NPS_vs_Ctr, NPS_vs_PD, PD_vs_Ctr,
+# Tauopathy_vs_Ctr, Tauopathy_vs_PD — no Function, row dendrogram only
+plot_df_all <- dat_full %>%
+  filter(term %in% terms_all_contrasts, contrast %in% all_contrasts_heatmap) %>%
+  mutate(
+    term_label = format_term(term),
+    sig = case_when(
+      P.Value < 0.0001 ~ "****",
+      P.Value < 0.001  ~ "***",
+      P.Value < 0.01   ~ "**",
+      P.Value < 0.05   ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+logfc_mat_all <- plot_df_all %>%
+  select(term_label, contrast, logFC) %>%
+  pivot_wider(names_from = contrast, values_from = logFC) %>%
+  column_to_rownames("term_label") %>%
+  as.matrix()
+logfc_mat_all <- logfc_mat_all[, all_contrasts_heatmap, drop = FALSE]
+
+sig_mat_all <- plot_df_all %>%
+  select(term_label, contrast, sig) %>%
+  pivot_wider(names_from = contrast, values_from = sig) %>%
+  column_to_rownames("term_label") %>%
+  as.matrix()
+sig_mat_all <- sig_mat_all[, all_contrasts_heatmap, drop = FALSE]
+
+colnames(logfc_mat_all) <- gsub("_", " ", colnames(logfc_mat_all))
+colnames(sig_mat_all) <- gsub("_", " ", colnames(sig_mat_all))
+
+if (any(is.na(logfc_mat_all))) {
+  stop("NA in logFC matrix for 5-contrast heatmap; check all_terms CSVs.")
+}
+
+fc_range_all <- range(logfc_mat_all, na.rm = TRUE)
+fc_max_all <- max(abs(fc_range_all))
+col_logfc_all <- circlize::colorRamp2(
+  c(-fc_max_all, 0, fc_max_all),
+  c("navy", "white", "firebrick3")
+)
+
+hc_row_all <- stats::hclust(stats::dist(logfc_mat_all))
+
+ht_all <- ComplexHeatmap::Heatmap(
+  logfc_mat_all,
+  name = "logFC",
+  col = col_logfc_all,
+  cluster_rows = stats::as.dendrogram(hc_row_all),
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_side = "right",
+  row_names_gp = gpar(fontsize = 8),
+  column_names_gp = gpar(fontsize = 9),
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    lab <- sig_mat_all[i, j]
+    if (!is.na(lab) && nzchar(lab)) {
+      grid.text(lab, x, y, gp = gpar(fontsize = 7, fontface = "bold", col = "black"))
+    }
+  },
+  heatmap_legend_param = list(
+    title = "logFC",
+    direction = "vertical"
+  )
+)
+
+pdf(
+  file.path(output_dir, "GO_BP_ssGSEA_top10_5comparisons_logFC_with_stars_rowCluster_noFunction.pdf"),
+  width = 9,
+  height = max(5, nrow(logfc_mat_all) * 0.22)
+)
+ComplexHeatmap::draw(
+  ht_all,
   heatmap_legend_side = "right",
   padding = unit(c(2, 6, 2, 2), "mm")
 )
