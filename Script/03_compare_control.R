@@ -369,6 +369,74 @@ ComplexHeatmap::draw(
 )
 dev.off()
 
+# Rotated row dendrogram: put two cutree clusters at the bottom of the heatmap and
+# swap their order (purple vs red). Pick k and cluster IDs after coloring the tree once:
+#   d0 <- as.dendrogram(hc_row_all)
+#   plot(dendextend::color_branches(d0, k = 5))
+suppressPackageStartupMessages(library(dendextend))
+
+rotate_row_k <- 6L
+Immune1 <- 4L
+Protein_metabolism <- 2L
+phophorylation <- 1L
+other_cellular_processes <- 3L
+Immune2 <- 5L
+Chemotaxis <- 6L
+
+d_row <- as.dendrogram(hc_row_all)
+hc_row_all <- stats::hclust(stats::dist(logfc_mat_all))
+grp <- stats::cutree(hc_row_all, k = rotate_row_k)
+leaf_in_dend_order <- rownames(logfc_mat_all)[hc_row_all$order]
+
+other <- leaf_in_dend_order[
+  !grp[leaf_in_dend_order] %in% c(phophorylation, other_cellular_processes)
+]
+
+blk_Immune1 <- leaf_in_dend_order[grp[leaf_in_dend_order] == Immune1]
+blk_Immune2 <- leaf_in_dend_order[grp[leaf_in_dend_order] == Immune2]
+blk_Protein_metabolism <- leaf_in_dend_order[grp[leaf_in_dend_order] == Protein_metabolism]
+blk_phophorylation <- leaf_in_dend_order[grp[leaf_in_dend_order] == phophorylation]
+blk_other_cellular_processes <- leaf_in_dend_order[grp[leaf_in_dend_order] == other_cellular_processes]
+blk_Chemotaxis <- leaf_in_dend_order[grp[leaf_in_dend_order] == Chemotaxis]
+
+new_leaf_order <- c(blk_Immune1, blk_Immune2, blk_Chemotaxis, blk_Protein_metabolism, blk_phophorylation, blk_other_cellular_processes,other)
+
+d_row_rot <- dendextend::rotate(d_row, order = new_leaf_order)
+
+ht_all_rot <- ComplexHeatmap::Heatmap(
+  logfc_mat_all,
+  name = "logFC",
+  col = col_logfc_all,
+  cluster_rows = d_row_rot,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_side = "right",
+  row_names_gp = gpar(fontsize = 8),
+  column_names_gp = gpar(fontsize = 9),
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    lab <- sig_mat_all[i, j]
+    if (!is.na(lab) && nzchar(lab)) {
+      grid.text(lab, x, y, gp = gpar(fontsize = 7, fontface = "bold", col = "black"))
+    }
+  },
+  heatmap_legend_param = list(
+    title = "logFC",
+    direction = "vertical"
+  )
+)
+
+pdf(
+  file.path(output_dir, "GO_BP_ssGSEA_top10_5comparisons_logFC_with_stars_rowCluster_noFunction_rotate.pdf"),
+  width = 9,
+  height = max(5, nrow(logfc_mat_all) * 0.22)
+)
+ComplexHeatmap::draw(
+  ht_all_rot,
+  heatmap_legend_side = "right",
+  padding = unit(c(2, 6, 2, 2), "mm")
+)
+dev.off()
+
 # Spider / radar plot (mean abs(logFC) per Function; normalized to [0, 1])
 # Make it comparable and not "weird":
 # - fix Function order
