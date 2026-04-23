@@ -437,6 +437,73 @@ ComplexHeatmap::draw(
 )
 dev.off()
 
+# GO BP IC per term (msigdbr GOBP -> GO:xx, then MSigDB C5 JSON fallback, GOSemSim::godata @IC)
+suppressPackageStartupMessages({
+  library(GOSemSim)
+  library(org.Hs.eg.db)
+  library(msigdbr)
+  library(jsonlite)
+})
+
+go_bp_map <- msigdbr::msigdbr(species = "Homo sapiens", collection = "C5", subcollection = "GO:BP") %>%
+  dplyr::distinct(gs_name, gs_exact_source)
+
+rn_rot <- rownames(logfc_mat_all)
+ic_per_term <- plot_df_all %>%
+  dplyr::distinct(term_label, term) %>%
+  dplyr::filter(term_label %in% rn_rot) %>%
+  dplyr::left_join(go_bp_map, by = c("term" = "gs_name")) %>%
+  dplyr::transmute(
+    term_label,
+    term,
+    GO_id = gs_exact_source
+  )
+
+# When msigdbr gs_name does not match (version drift), use local MSigDB C5 JSON exactSource
+c5_json_path <- file.path("Data", "c5.all.v2026.1.Hs.txt")
+if (any(is.na(ic_per_term$GO_id)) && file.exists(c5_json_path)) {
+  c5_obj <- jsonlite::fromJSON(c5_json_path, simplifyDataFrame = FALSE)
+  json_go_id <- vapply(ic_per_term$term, function(te) {
+    if (!te %in% names(c5_obj)) {
+      return(NA_character_)
+    }
+    es <- c5_obj[[te]]$exactSource
+    if (length(es) < 1L || !is.character(es) || !nzchar(es[1L])) {
+      return(NA_character_)
+    }
+    es[1L]
+  }, character(1))
+  fill <- is.na(ic_per_term$GO_id) & !is.na(json_go_id)
+  ic_per_term$GO_id[fill] <- json_go_id[fill]
+} else if (any(is.na(ic_per_term$GO_id)) && !file.exists(c5_json_path)) {
+  message("Note: some GO_id are NA; optional fallback file missing: ", c5_json_path)
+}
+
+# Manual GOBP -> GO: for terms dropped/renamed in newer msigdbr / absent from local JSON
+go_id_manual <- c(
+  "GOBP_REGULATION_OF_PROTEIN_PHOSPHORYLATION" = "GO:0001932",
+  "GOBP_CELL_CELL_SIGNALING_BY_WNT" = "GO:0198738"
+)
+ic_per_term$GO_id <- dplyr::coalesce(
+  ic_per_term$GO_id,
+  as.character(go_id_manual[ic_per_term$term])
+)
+
+go_sim_ic <- GOSemSim::godata(annoDb = "org.Hs.eg.db", ont = "BP", computeIC = TRUE)
+ic_per_term$IC <- unname(go_sim_ic@IC[ic_per_term$GO_id])
+
+# Same row order as GO_BP_ssGSEA_top10_5comparisons_logFC_with_stars_rowCluster_noFunction_rotate.pdf (d_row_rot)
+ic_row_order_heatmap <- rownames(logfc_mat_all)[stats::order.dendrogram(d_row_rot)]
+ic_per_term <- ic_per_term[match(ic_row_order_heatmap, ic_per_term$term_label), , drop = FALSE]
+if (anyNA(ic_per_term$term_label)) {
+  stop("IC table row order: missing term_label after match to dendrogram (unexpected).")
+}
+
+readr::write_csv(
+  ic_per_term,
+  file.path(output_dir, "GO_BP_ssGSEA_top10_5comparisons_rotate_cluster_IC_per_term.csv")
+)
+
 # Spider / radar plot (mean abs(logFC) per Function; normalized to [0, 1])
 # Make it comparable and not "weird":
 # - fix Function order
@@ -483,14 +550,14 @@ if (any(is.na(contrast_cols))) {
 # Build fmsb radarchart input:
 # first two rows are max/min, following rows are each comparison
 radar_wide <- radar_df %>%
-  select(Function, contrast_label, score) %>%
+  dplyr::select(Function, contrast_label, score) %>%
   pivot_wider(names_from = Function, values_from = score) %>%
   arrange(factor(contrast_label, levels = contrast_levels))
 
-radar_mat <- as.data.frame(radar_wide %>% select(-contrast_label))
+radar_mat <- as.data.frame(radar_wide %>% dplyr::select(-contrast_label))
 radar_mat <- rbind(rep(1, ncol(radar_mat)), rep(0, ncol(radar_mat)), radar_mat)
 radar_mat <- as.data.frame(radar_mat)
-colnames(radar_mat) <- colnames(radar_wide %>% select(-contrast_label))
+colnames(radar_mat) <- colnames(radar_wide %>% dplyr::select(-contrast_label))
 
 pdf(file.path(output_dir, "GO_BP_spider_meanAbsLogFC_byFunction_norm.pdf"),
     width = 10, height = 6)
