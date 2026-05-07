@@ -420,27 +420,21 @@ desired_maxanc_order <- c(
   "leukocyte chemotaxis"
 )
 if (nrow(rep_from_anc_table) >= 1L) {
-  cl_term <- rep_from_anc_table %>%
-    dplyr::mutate(maxanc_term_lc = tolower(as.character(.data$MaxAncIC_ancestor_term)))
-  clusters_in_target_order <- unlist(lapply(desired_maxanc_order, function(tt) {
-    cl_term$cluster[cl_term$maxanc_term_lc == tt]
-  }), use.names = FALSE)
-  clusters_in_target_order <- unique(clusters_in_target_order)
-  cluster_order_rotate <- c(
-    clusters_in_target_order,
-    cluster_order_csv[!cluster_order_csv %in% clusters_in_target_order]
+  # Final rotate order: group terms by cluster MaxAncIC label in desired order,
+  # while preserving within-group relative order from current d_row_rot.
+  cl2term <- setNames(
+    tolower(as.character(rep_from_anc_table$MaxAncIC_ancestor_term)),
+    as.character(rep_from_anc_table$cluster)
   )
-  ordered_grp_ids <- unlist(lapply(cluster_order_rotate, function(cl) {
-    grp_meta$grp_id[grp_meta$dominant_cluster == cl]
+  term2cluster <- setNames(as.character(row_annot_tbl$cluster), row_annot_tbl$term_label)
+  current_leaf_order <- rownames(logfc_mat_all)[stats::order.dendrogram(d_row_rot)]
+  term_labels_lc <- unname(cl2term[term2cluster[current_leaf_order]])
+
+  blocks <- unlist(lapply(desired_maxanc_order, function(lbl) {
+    current_leaf_order[!is.na(term_labels_lc) & term_labels_lc == lbl]
   }), use.names = FALSE)
-  ordered_grp_ids <- c(
-    ordered_grp_ids,
-    grp_meta$grp_id[!grp_meta$grp_id %in% ordered_grp_ids]
-  )
-  ordered_grp_ids <- unique(ordered_grp_ids)
-  new_leaf_order <- unlist(lapply(ordered_grp_ids, function(gid) {
-    leaf_in_dend_order[grp[leaf_in_dend_order] == gid]
-  }), use.names = FALSE)
+  remainder <- current_leaf_order[!current_leaf_order %in% blocks]
+  new_leaf_order <- c(blocks, remainder)
   d_row_rot <- dendextend::rotate(d_row, order = new_leaf_order)
 }
 row_annot_tbl <- row_annot_tbl %>% dplyr::left_join(rep_from_anc_table, by = "cluster")
