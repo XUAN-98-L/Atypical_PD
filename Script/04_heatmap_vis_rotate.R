@@ -413,11 +413,11 @@ if (nrow(cluster_bp_ancestor_by_pct) >= 1L) {
 # Rotate order for *_rotate heatmaps: enforce MaxAncIC block order left->right.
 desired_maxanc_order <- c(
   "regulation of immune system process",
-  "biological regulation",
-  "metabolic process",
-  "protein maturation",
+  "leukocyte chemotaxis",
   "extrinsic apoptotic signaling pathway",
-  "leukocyte chemotaxis"
+  "protein maturation",
+  "metabolic process",
+  "biological regulation"
 )
 if (nrow(rep_from_anc_table) >= 1L) {
   # Final rotate order: group terms by cluster MaxAncIC label in desired order,
